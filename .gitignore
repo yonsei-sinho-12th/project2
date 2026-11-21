@@ -1,0 +1,15 @@
+# 데이터·캐시·중간 산출물은 올리지 않습니다 (개인 녹음 포함 가능)
+train/
+validation/
+.waveform_cache/
+input/
+output/
+val_test/
+runs/
+*.npy
+last.pt
+*.tmp
+__pycache__/
+.ipynb_checkpoints/
+nohup.out
+*.log
