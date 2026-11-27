@@ -1,0 +1,36 @@
+# CPU 스모크 테스트: 전체 경로(데이터 -> 학습 -> D 갱신 -> 검증 -> 저장)가 도는지만 확인합니다.
+# 성능 목적이 아닙니다.  python train.py --config configs/smoke_cpu.yaml
+seed: 1234
+
+data:
+  root: ../deep_learning_noise_reduction_challenge
+  segment_seconds: 1.0
+  remix_prob: 0.5
+  num_workers: 0
+  max_train_files: 64
+
+model:
+  dense_channel: 16
+  num_tsblocks: 1
+  n_heads: 2
+  dense_depth: 2
+  conv_kernel: 15
+
+loss:
+  pesq_warmup_epochs: 1
+
+disc: {replay_size: 32, replay_k: 1}
+
+train:
+  epochs: 2
+  batch_size: 4
+  lr: 1.0e-3
+  amp: false
+  val_every: 1
+  val_max_files: 16
+  val_batch_size: 4
+  pesq_workers: 2
+  log_every: 5
+  max_steps_per_epoch: 8
+  diagnose_grad_norms: true
+  out_dir: runs/smoke_cpu

@@ -1,0 +1,5 @@
+# 조교 평가(추론 전용) 최소 패키지: python inference.py --input input --output output
+torch>=2.1
+numpy
+soundfile
+scipy

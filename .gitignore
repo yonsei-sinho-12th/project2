@@ -1,15 +1,11 @@
-# 데이터·캐시·중간 산출물은 올리지 않습니다 (개인 녹음 포함 가능)
-train/
-validation/
-.waveform_cache/
-input/
-output/
-val_test/
+*.wav
+*.zip
 runs/
-*.npy
-last.pt
-*.tmp
+.cache/
 __pycache__/
-.ipynb_checkpoints/
-nohup.out
-*.log
+pesqenv/
+.venv/
+AI_HANDOFF.md
+HANDOVER.md
+README_noisebank.md
+docs/

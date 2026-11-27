@@ -1,0 +1,31 @@
+# 경량 설정: 하이퍼파라미터 탐색·빠른 비교용 (본 설정 대비 약 1/4 연산).
+# 탐색으로 고른 손실 가중치/증강 값을 본 설정에 옮겨 최종 학습하세요.
+seed: 1234
+
+data:
+  root: ../deep_learning_noise_reduction_challenge
+  segment_seconds: 2.0
+  remix_prob: 0.5
+  num_workers: 2
+
+model:
+  dense_channel: 32
+  num_tsblocks: 2
+  n_heads: 4
+  dropout: 0.1
+
+loss:
+  pesq: 3.0
+  metric: 0.3
+  pesq_start_epoch: 2
+  pesq_warmup_epochs: 4
+  metric_start_epoch: 2
+
+train:
+  epochs: 40
+  batch_size: 8
+  lr: 1.0e-3
+  lr_gamma: 0.98
+  val_every: 2
+  pesq_workers: 4
+  out_dir: runs/mpsenet_lite

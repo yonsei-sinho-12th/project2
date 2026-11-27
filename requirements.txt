@@ -1,8 +1,10 @@
+# 학습·튜닝·채점용 (Python 3.10 이상)
 torch>=2.1
 numpy
 scipy
-pandas
 soundfile
-pesq==0.0.4
-matplotlib
+pyyaml
 tqdm
+# pesq==0.0.4 (평가와 같은 버전)는 C 확장이라 별도로 설치합니다 (배포 노트북과 같은 방법):
+#   pip install setuptools wheel Cython
+#   pip install --no-build-isolation pesq==0.0.4

@@ -1,0 +1,59 @@
+# 본 설정: MP-SENet 원 논문 규모(약 2.05M params) + PESQ 지표 직접 최적화.
+# GPU(Colab T4/L4/A100 등) 기준. GPU 메모리가 부족(CUDA out of memory)하면
+#   --set train.batch_size=2   또는   --set data.segment_seconds=1.5
+# GPU 메모리가 24GB 이상이면 data.segment_seconds=3.0 (평가 파일 전체 길이) 을 권장합니다.
+seed: 1234
+
+data:
+  root: ../deep_learning_noise_reduction_challenge
+  segment_seconds: 2.0        # 3초 파일에서 무작위 2초 구간 (MP-SENet 원 설정과 같은 길이)
+  remix_prob: 0.5             # 절반은 원본 쌍, 절반은 도메인 매칭 리믹스
+  remix_same_category_prob: 0.0
+  noise_roll: true
+  speed_perturb_prob: 0.0
+  num_workers: 2
+
+stft: {n_fft: 400, hop: 100, win: 400, compress: 0.3}
+
+model:
+  dense_channel: 64
+  num_tsblocks: 4
+  n_heads: 4
+  dropout: 0.1
+  mask_beta: 2.0
+
+pcs:
+  pre: true
+  post: true
+  init: pcs400
+  target: false
+  tv_weight: 0.01
+
+loss:
+  mag: 0.9
+  phase: 0.3
+  complex: 0.1
+  consistency: 0.1
+  time: 0.2
+  mrstft: 0.1
+  pesq: 3.0                   # 미분 가능한 PESQ 손실: 가장 큰 가중치 (초기 기울기 기준 복원 손실 합의 약 10배 이상)
+  metric: 0.3                 # MetricGAN+ 적대 손실 (D 출력 -> 1.0 = PESQ 4.5)
+  pesq_start_epoch: 3         # 1~2 epoch 는 복원 손실로 기본 매핑을 먼저 학습
+  pesq_warmup_epochs: 8       # 3~10 epoch 동안 PESQ 손실 가중치를 0 -> 3.0 으로 선형 증가
+  metric_start_epoch: 3       # 판별자는 1 epoch 부터 실제 PESQ 로 먼저 학습
+
+disc: {dim: 16, lr: 5.0e-4, use_noisy: true, replay_size: 256, replay_k: 2}
+
+train:
+  epochs: 120
+  batch_size: 4
+  lr: 5.0e-4
+  betas: [0.8, 0.99]
+  lr_gamma: 0.99
+  clip_grad: 10.0
+  amp: true
+  ema_decay: 0.999
+  val_every: 1
+  pesq_workers: 4
+  out_dir: runs/mpsenet_pesqmax
+  early_stop_patience: 25

@@ -1,0 +1,34 @@
+# CPU 데모: GPU 없이 학습 곡선(실제 PESQ 상승)만 확인하는 소형 설정. 제출용이 아닙니다.
+#   python train.py --config configs/cpu_demo.yaml
+seed: 1234
+
+data:
+  root: ../deep_learning_noise_reduction_challenge
+  segment_seconds: 1.0
+  remix_prob: 0.5
+  num_workers: 0
+
+model:
+  dense_channel: 16
+  num_tsblocks: 1
+  n_heads: 2
+  conv_kernel: 15
+
+loss:
+  pesq_start_epoch: 2
+  pesq_warmup_epochs: 2
+  metric_start_epoch: 2
+
+disc: {replay_size: 128, replay_k: 1}
+
+train:
+  epochs: 12
+  batch_size: 4
+  lr: 1.0e-3
+  lr_gamma: 0.97
+  amp: false
+  val_every: 1
+  pesq_workers: 2
+  log_every: 20
+  max_steps_per_epoch: 80
+  out_dir: runs/cpu_demo

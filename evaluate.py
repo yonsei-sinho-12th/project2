@@ -1,70 +1,171 @@
-"""검증셋 전체 평가: 파일별·잡음 종류별 PESQ-WB와 SNR을 CSV로 저장합니다.
+#!/usr/bin/env python
+"""리더보드와 같은 방식(전체 파일 PESQ-WB 산술평균, pesq 패키지 wb 모드)으로 결과를 채점합니다.
 
-예)  python evaluate.py --data-root <배포 폴더> --checkpoint checkpoints/best_generator.pt
+(1) 배포 폴더의 manifest 로 짝을 맞추는 방법 (검증셋 자가 채점):
+    python evaluate.py --enhanced output --data_root ../deep_learning_noise_reduction_challenge
+(2) 폴더끼리 파일명으로 짝을 맞추는 방법:
+    python evaluate.py --enhanced output --clean_dir CLEAN_DIR [--noisy_dir INPUT_DIR]
+    (출력 파일명에 '_noisy' 가 붙어 있고 clean 에는 없으면 자동으로 맞춰 봅니다)
+
+형식 검사: 누락/추가 WAV, 16 kHz 모노 여부, 입력과 같은 표본 수, NaN 여부.
 """
+
+from __future__ import annotations
+
 import argparse
+import csv
+import sys
+from collections import defaultdict
 from pathlib import Path
 
-import numpy as np
-import pandas as pd
-import torch
-
-from data import load_split
-from infer import enhance_wave, pick_device
-from metrics import PesqPool, snr_db
-from model import load_generator
+REPO = Path(__file__).resolve().parent
+sys.path.insert(0, str(REPO))
 
 
-def evaluate(model, manifest, waves, device, pesq_pool):
-    enhanced = [enhance_wave(model, waves[i, 0], device) for i in range(len(waves))]
-    clean = list(waves[:, 1])
-    pesq_in = pesq_pool.map(clean, list(waves[:, 0]))
-    pesq_out = pesq_pool.map(clean, enhanced)
-    rows = []
-    for i, row in enumerate(manifest.itertuples(index=False)):
-        snr_in, snr_out = snr_db(clean[i], waves[i, 0]), snr_db(clean[i], enhanced[i])
-        rows.append({"segment_id": row.segment_id,
-                     "noise_category": getattr(row, "noise_category", ""),
-                     "target_snr_db": getattr(row, "target_snr_db", np.nan),
-                     "input_pesq_wb": pesq_in[i], "model_pesq_wb": pesq_out[i],
-                     "delta_pesq_wb": pesq_out[i] - pesq_in[i],
-                     "input_snr_db": snr_in, "model_snr_db": snr_out, "delta_snr_db": snr_out - snr_in})
-    return pd.DataFrame(rows), enhanced
+def parse_args():
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--enhanced", required=True, help="복원 결과 폴더 (output/)")
+    parser.add_argument("--data_root", default=None, help="manifest 를 쓸 배포 폴더")
+    parser.add_argument("--split", default="validation")
+    parser.add_argument("--clean_dir", default=None)
+    parser.add_argument("--noisy_dir", default=None, help="입력 폴더 (형식 검사·noisy 기준점수)")
+    parser.add_argument("--csv", default=None, help="파일별 결과 CSV 경로")
+    parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--sample_rate", type=int, default=16000)
+    return parser.parse_args()
 
 
-def main(argv=None):
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--data-root", required=True)
-    p.add_argument("--cache-dir", default=None)
-    p.add_argument("--checkpoint", default="checkpoints/best_generator.pt")
-    p.add_argument("--split", default="validation")
-    p.add_argument("--out-dir", default=None, help="결과 CSV 폴더 (기본: 가중치 폴더)")
-    p.add_argument("--device", default="auto")
-    args = p.parse_args(argv)
+def build_pairs(args):
+    """[(enhanced_path, clean_path, noisy_path|None, meta dict)]"""
+    enhanced = Path(args.enhanced)
+    pairs = []
+    if args.data_root:
+        from pesqmax.data import read_manifest, resolve_data_root
+        root = resolve_data_root(args.data_root, REPO)
+        for row in read_manifest(root, args.split):
+            noisy = root / row["noisy_path"]
+            pairs.append((enhanced / noisy.name, root / row["clean_path"], noisy,
+                          {"segment_id": row["segment_id"],
+                           "noise_category": row.get("noise_category", ""),
+                           "target_snr_db": row.get("target_snr_db", "")}))
+        return pairs
+    if not args.clean_dir:
+        sys.exit("--data_root 또는 --clean_dir 중 하나가 필요합니다.")
+    clean_dir = Path(args.clean_dir)
+    noisy_dir = Path(args.noisy_dir) if args.noisy_dir else None
+    names = sorted(p.name for p in (noisy_dir or enhanced).iterdir() if p.suffix.lower() == ".wav")
+    for name in names:
+        clean = clean_dir / name
+        if not clean.is_file():
+            stem = Path(name).stem
+            for suffix in ("_noisy", "-noisy", "_mix"):
+                if stem.endswith(suffix):
+                    clean = clean_dir / (stem[: -len(suffix)] + Path(name).suffix)
+                    break
+        pairs.append((enhanced / name, clean, (noisy_dir / name) if noisy_dir else None,
+                      {"segment_id": Path(name).stem}))
+    return pairs
 
-    pool = PesqPool()
-    device = pick_device(args.device)
-    model, state = load_generator(args.checkpoint, device)
-    manifest, waves = load_split(args.data_root, args.split, args.cache_dir)
-    detail, _ = evaluate(model, manifest, waves, device, pool)
-    pool.close()
 
-    out_dir = Path(args.out_dir or Path(args.checkpoint).parent)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    detail.to_csv(out_dir / f"{args.split}_per_file.csv", index=False, encoding="utf-8-sig")
-    summary = pd.DataFrame({
-        "비교": ["잡음 입력", "모델 복원", "개선량"],
-        "파일 수": len(detail),
-        "평균 PESQ-WB": [detail.input_pesq_wb.mean(), detail.model_pesq_wb.mean(), detail.delta_pesq_wb.mean()],
-        "평균 SNR (dB)": [detail.input_snr_db.mean(), detail.model_snr_db.mean(), detail.delta_snr_db.mean()],
-    })
-    summary.to_csv(out_dir / f"{args.split}_summary.csv", index=False, encoding="utf-8-sig")
-    by_noise = (detail.groupby("noise_category")[["input_pesq_wb", "model_pesq_wb", "delta_pesq_wb", "delta_snr_db"]]
-                .mean().sort_values("model_pesq_wb"))
-    by_noise.to_csv(out_dir / f"{args.split}_by_noise.csv", encoding="utf-8-sig")
-    pd.set_option("display.width", 160)
-    print(summary.round(4).to_string(index=False))
-    print("\n잡음 종류별 평균 (낮은 순)\n", by_noise.round(3).to_string())
+def main():
+    args = parse_args()
+    import numpy as np
+    import soundfile as sf
+
+    from pesqmax.metrics import PesqPool, snr_db
+
+    pairs = build_pairs(args)
+    enhanced_dir = Path(args.enhanced)
+    problems = []
+    expected = {p[0].name for p in pairs}
+    extra = sorted(p.name for p in enhanced_dir.iterdir()
+                   if p.suffix.lower() == ".wav" and p.name not in expected)
+    if extra:
+        problems.append(f"추가 WAV {len(extra)}개: {extra[:5]}")
+
+    refs, degs, noisies, rows = [], [], [], []
+    for enh_path, clean_path, noisy_path, meta in pairs:
+        if not enh_path.is_file():
+            problems.append(f"누락: {enh_path.name}")
+            continue
+        if not clean_path.is_file():
+            problems.append(f"clean 없음: {clean_path}")
+            continue
+        enh, rate = sf.read(str(enh_path), dtype="float32", always_2d=True)
+        clean, rate_c = sf.read(str(clean_path), dtype="float32")
+        if enh.shape[1] != 1:
+            problems.append(f"모노 아님: {enh_path.name} ({enh.shape[1]}ch)")
+        if rate != args.sample_rate:
+            problems.append(f"표본률 {rate} Hz: {enh_path.name}")
+        enh = enh[:, 0]
+        noisy = None
+        if noisy_path is not None and noisy_path.is_file():
+            noisy, _ = sf.read(str(noisy_path), dtype="float32")
+            if len(noisy) != len(enh):
+                problems.append(f"표본 수 불일치: {enh_path.name} (입력 {len(noisy)}, 출력 {len(enh)})")
+        if not np.all(np.isfinite(enh)):
+            problems.append(f"NaN/Inf: {enh_path.name}")
+            enh = np.nan_to_num(enh)
+        n = min(len(clean), len(enh))
+        refs.append(clean[:n])
+        degs.append(enh[:n])
+        noisies.append(None if noisy is None else noisy[:n])
+        rows.append(dict(meta, file=enh_path.name))
+
+    if not rows:
+        sys.exit("채점할 파일이 없습니다.\n" + "\n".join(problems))
+    pool = PesqPool(args.workers, args.sample_rate)
+    try:
+        scores = pool.map(refs, degs)
+        have_noisy = all(x is not None for x in noisies)
+        base = pool.map(refs, noisies) if have_noisy else None
+    finally:
+        pool.close()
+
+    for i, row in enumerate(rows):
+        row["pesq_wb"] = scores[i]
+        row["snr_db"] = snr_db(refs[i], degs[i])
+        if base is not None:
+            row["input_pesq_wb"] = base[i]
+            row["delta_pesq_wb"] = scores[i] - base[i]
+            row["input_snr_db"] = snr_db(refs[i], noisies[i])
+    errors = int(np.sum(~np.isfinite(scores)))
+    if errors:
+        problems.append(f"PESQ 계산 오류 {errors}개")
+
+    print("=" * 64)
+    print(f"파일 {len(rows)}/{len(pairs)}개 | 평균 PESQ-WB {np.nanmean(scores):.4f}"
+          + (f" | 입력(noisy) {np.nanmean(base):.4f} | 개선 {np.nanmean(scores - base):+.4f}"
+             if base is not None else ""))
+    print(f"평균 SNR {np.mean([r['snr_db'] for r in rows]):.2f} dB")
+    for key in ("noise_category", "target_snr_db"):
+        if rows and rows[0].get(key, "") != "":
+            groups = defaultdict(list)
+            for r in rows:
+                groups[r[key]].append(r["pesq_wb"])
+            print(f"-- {key}별 PESQ-WB")
+
+            def order(g):
+                try:
+                    return (0, float(g), "")
+                except ValueError:
+                    return (1, 0.0, str(g))
+
+            for name in sorted(groups, key=order):
+                print(f"   {str(name):24s} n={len(groups[name]):3d}  {np.nanmean(groups[name]):.4f}")
+    print("형식 검사: " + ("통과" if not problems else "문제 있음"))
+    for message in problems[:30]:
+        print("   - " + message)
+    print("=" * 64)
+    if args.csv:
+        keys = list(rows[0].keys())
+        with open(args.csv, "w", newline="", encoding="utf-8-sig") as handle:
+            writer = csv.DictWriter(handle, fieldnames=keys)
+            writer.writeheader()
+            writer.writerows(rows)
+        print(f"파일별 결과: {args.csv}")
+    sys.exit(1 if problems else 0)
 
 
 if __name__ == "__main__":
